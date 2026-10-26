@@ -262,6 +262,16 @@ export const zh = {
   trayToggle: '系统托盘',
   trayToggleHint:
     '桌面模式启动后在通知区域（macOS 为菜单栏）常驻一个图标，列出配置里的全部宠物，勾选就能切换显示位置——包括当前不在桌面、没有窗口可右键的那些。关掉之后要把宠物叫回桌面，只能开浏览器用设置页，或在网页端那只宠物身上右键。Windows 本来就会把它折叠进「隐藏的图标」面板。仅影响桌面模式。',
+  restTitle: '休息提醒',
+  restHint:
+    '开启后每到一个间隔，用桌宠现有气泡显示固定文字「起来活动一下」——纯本地计时，不调用模型，也不发系统通知。关闭 = 立即停止计时；修改间隔 / 开关后点「保存」立即按新设置重新计时；重启 DSH 后从完整间隔开始，不补发未运行期间的提醒。',
+  restToggle: '休息提醒',
+  restToggleHint:
+    '开启后按下面的间隔弹出提醒气泡；关闭后立即停止计时，后续不再触发。修改开关或间隔后点「保存」生效，重复保存不会叠加计时器。',
+  restInterval: '提醒间隔（分钟）',
+  restIntervalHint:
+    '默认 25 分钟；支持小数，0.5 = 30 秒（仅用于短间隔测试）。必须大于 0，0 / 负数 / 非数字都会拒绝保存。',
+  invalidRestInterval: '请检查休息提醒间隔：需为大于 0 的分钟数（0.5 = 30 秒）。',
   physicsTitle: '物理（拖拽抛掷手感）',
   physicsHint:
     '全局默认，所有宠物共用（pet pack 可在自己种类文件里单独覆盖）；随「保存」写入用户配置（不做即时写入）。浏览器保存后即时生效，桌面端由保存重载宠物窗口后生效。',
@@ -456,6 +466,17 @@ export const en = {
   trayToggle: 'System tray',
   trayToggleHint:
     'Shows a tray icon (notification area on Windows, menu bar on macOS) once desktop mode is running. It lists every pet in the config and toggles each one between desktop and web/none — including pets that are currently off the desktop and therefore have no window to right-click. With it off, bringing a pet back to the desktop requires opening the browser (the settings page, or right-clicking a web pet there). Windows already folds third-party icons into the "hidden icons" overflow. Desktop mode only.',
+  restTitle: 'Rest reminder',
+  restHint:
+    'When enabled, the pet shows the fixed bubble text "起来活动一下" once per interval — purely local timing: no model calls and no system notifications. Turning it off stops the timer immediately; after changing the switch or interval, click "Save" to restart timing with the new values; after a DSH restart the full interval starts again, with no makeup for the time the app was closed.',
+  restToggle: 'Rest reminder',
+  restToggleHint:
+    'When enabled, the pet shows a reminder bubble every interval below; turning it off stops the timer immediately and nothing fires afterwards. Click "Save" after changing the switch or interval — repeated saves never stack timers.',
+  restInterval: 'Interval (minutes)',
+  restIntervalHint:
+    'Default 25 minutes. Decimals are allowed: 0.5 = 30 seconds (for short-interval testing only). Must be greater than 0; 0 / negative / non-numeric values are rejected on save.',
+  invalidRestInterval:
+    'Check the rest reminder interval: it must be a number of minutes greater than 0 (0.5 = 30 seconds).',
   physicsTitle: 'Physics (drag & throw feel)',
   physicsHint:
     'Global default, shared by every pet (a pet pack may override it in its own kind file); written to the user config on "Save" (never written immediately). Applies instantly in the browser; on the desktop it applies once Save reloads the pet windows.',
@@ -974,6 +995,10 @@ export function makePetConfigSection(rt: {
     const [confineScreen, setConfineScreen] = useState(false);
     // 系统托盘开关（全局）：随「保存」一起提交；宿主半侧据此决定建不建托盘、没桌面宠物时还值不值得常驻 Helper。
     const [trayEnabled, setTrayEnabled] = useState(true);
+    // 休息提醒（全局）：开关 + 间隔（分钟，允许小数，0.5 = 30 秒）。只改本地状态，随「保存」整包写入；
+    // 初值取内置默认（关闭 / 25 分钟），加载成品后由 applyConfig 覆盖。
+    const [restEnabled, setRestEnabled] = useState(false);
+    const [restIntervalMin, setRestIntervalMin] = useState(25);
     // 物理参数（全局）：只改本地状态，随「保存」整包写入；初值仅占位，成品加载成功后才允许编辑与保存。
     const [physics, setPhysics] = useState<PhysicsParams>({ ...DEFAULT_PHYSICS });
     // 字体（全局默认）：与 physics 同一套语义；初值仅占位，成品加载成功后才允许编辑与保存。
@@ -1007,6 +1032,10 @@ export function makePetConfigSection(rt: {
       if (typeof m.chatImageEnabled === 'boolean') setChatImage(m.chatImageEnabled);
       if (typeof m.confineToScreen === 'boolean') setConfineScreen(m.confineToScreen);
       if (typeof m.trayEnabled === 'boolean') setTrayEnabled(m.trayEnabled);
+      // 休息提醒：成品已填满（内置默认关闭 / 25 分钟），合法才上屏，避免手改写坏时把 NaN 灌进输入框。
+      if (typeof m.restReminderEnabled === 'boolean') setRestEnabled(m.restReminderEnabled);
+      const rri = Number(m.restReminderIntervalMin);
+      if (Number.isFinite(rri) && rri > 0) setRestIntervalMin(rri);
       // physics 段：成品已按「内置默认 ← 用户层」整段填满，直接取用（缺子键再用默认兜底一次）
       if (m.physics && typeof m.physics === 'object') {
         setPhysics({ ...DEFAULT_PHYSICS, ...(m.physics as PhysicsParams) });
@@ -1166,6 +1195,12 @@ export function makePetConfigSection(rt: {
         setMsg({ kind: 'err', text: t('invalidChatImageLimit') });
         return false;
       }
+      // 休息提醒间隔：与宿主 restReminderIntervalValid 同一套规则（有限且 > 0，小数分钟合法）。
+      // 开关关闭时也校验：不允许把 0 / 负数 / NaN 写进配置文件，否则重新开启时会得到一个非法间隔。
+      if (!Number.isFinite(restIntervalMin) || restIntervalMin <= 0) {
+        setMsg({ kind: 'err', text: t('invalidRestInterval') });
+        return false;
+      }
       // 字体：与宿主 fontValid 同一套规则（family 必须在预设白名单内、size 4~200、followPet 为布尔）
       if (
         !FONT_PRESETS.some((p) => p.id === font.family) ||
@@ -1197,6 +1232,8 @@ export function makePetConfigSection(rt: {
           chatImageEnabled: chatImage,
           confineToScreen: confineScreen,
           trayEnabled: trayEnabled,
+          restReminderEnabled: restEnabled,
+          restReminderIntervalMin: restIntervalMin,
           physics: physics,
           whisperModel: whisperModel,
           chatModel: chatModel,
@@ -1626,6 +1663,35 @@ export function makePetConfigSection(rt: {
                 toggleCell('chatImageToggle', chatImage, busy, setChatImage),
                 toggleCell('confineToggle', confineScreen, busy, setConfineScreen, true),
                 toggleCell('trayToggle', trayEnabled, busy, setTrayEnabled),
+              ],
+            }),
+          ],
+        }),
+
+        // 休息提醒卡：全局开关 + 间隔（分钟）。与其余全局字段同语义——只改本地状态，随「保存」整包写入；
+        // 宿主保存成功后立即 rearm（唯一计时器），关闭 = 立即清掉旧定时器，改间隔 = 按新间隔重新起算。
+        h('div', {
+          className: 'dsh-pet-cfg__card',
+          children: [
+            cardHead(t('restTitle'), t('restHint')),
+            h('div', {
+              className: 'dsh-pet-cfg__grid2',
+              children: [
+                toggleCell('restToggle', restEnabled, busy, setRestEnabled),
+                field(
+                  t('restInterval'),
+                  h('input', {
+                    type: 'number',
+                    className: inputClass,
+                    step: '0.5',
+                    min: '0.5',
+                    value: String(restIntervalMin),
+                    disabled: busy,
+                    onChange: (e: ChangeEvent<HTMLInputElement>) => setRestIntervalMin(Number(e.target.value)),
+                  }),
+                  t('restIntervalHint'),
+                  true,
+                ),
               ],
             }),
           ],

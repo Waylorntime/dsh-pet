@@ -78,6 +78,7 @@ import {
 } from './notify-events';
 import { profileNameFrom, storageEntries } from './storage-paths';
 import { parseStateWaitQuery, PollStateStore } from './state';
+import { createRestReminderScheduler } from './rest-reminder';
 import { composeSystemPrompt, petPersona } from './persona';
 import {
   HelperProcess,
@@ -387,6 +388,27 @@ export function apply(ctx: any): void {
   // 这里只负责把状态变化同步进 S 的 `pets.<id>.lock`。
   const lock = new LockStore({
     onChange: (petId, data) => state.writePet(petId, 'lock', data),
+  });
+
+  // 休息提醒：宿主侧唯一计时器（全局开关 + 间隔，纯本地，不调用模型）。
+  // 到点写 S 的 pets.<id>.say（anim:false = 只弹现有说话气泡、不联动碎碎念动画），
+  // 与 /say、/broadcast、对话回复走同一条展示链路；浏览器与桌面渲染端各自轮询后同时可见。
+  // 开关 / 间隔只在配置保存成功后 rearm（见 PUT /config、POST /config、POST /pet-display），
+  // 定时器数量恒为 0 或 1；插件卸载由下方 ctx.effect 的清理函数 dispose。
+  const restReminder = createRestReminderScheduler({
+    readSnapshot: () => {
+      const cfg = readAllConfig(configPaths);
+      const main = cfg.main ?? {};
+      return {
+        enabled: main.restReminderEnabled === true,
+        intervalMin: Number(main.restReminderIntervalMin),
+        petIds: flattenPetList(cfg)
+          .map((p) => String(p.id ?? ''))
+          .filter((id) => id !== ''),
+      };
+    },
+    say: (petId, text) => state.writePet(petId, 'say', { text, anim: false }),
+    log: (message) => log.info(message),
   });
 
   // 实况快照（issue #122 第 1 条）：桌面渲染端变化时上报，第三方用 GET /pose 读。
@@ -1199,7 +1221,7 @@ export function apply(ctx: any): void {
               status: 400,
               obj: {
                 error:
-                  'invalid pet config: expected { pets:[{name?,id,size,balanceEnabled,display,position:{corner,marginX,marginY}}] }（id 为非空字符串且去除首尾空白后唯一；display 为 web/desktop/both/none 之一；可选顶层 notificationsEnabled / whisperImageEnabled / chatImageEnabled / trayEnabled 布尔；可选宠物布尔 whisperEnabled / workStatusEnabled / fixedEnabled）',
+                  'invalid pet config: expected { pets:[{name?,id,size,balanceEnabled,display,position:{corner,marginX,marginY}}] }（id 为非空字符串且去除首尾空白后唯一；display 为 web/desktop/both/none 之一；可选顶层 notificationsEnabled / whisperImageEnabled / chatImageEnabled / trayEnabled / restReminderEnabled 布尔；可选 restReminderIntervalMin 为正数（分钟）；可选宠物布尔 whisperEnabled / workStatusEnabled / fixedEnabled）',
               },
             };
           }
@@ -1215,6 +1237,9 @@ export function apply(ctx: any): void {
           }
           await mkdir(userRoot, { recursive: true });
           await writeFile(userConfigPath, JSON.stringify(clean, null, 2), 'utf8');
+          // 休息提醒：配置已落盘，按新开关 / 新间隔重排唯一计时器（关闭 = 立即清掉旧定时器）。
+          // 放在写盘之后：rearm 自己会重新读一次成品配置，读到的必须是刚刚保存的这一份。
+          restReminder.rearm();
           void syncDesktop(); // display/size 等可能变化：重解析桌面宠物并重启 Helper（异步，不阻塞保存响应）
           // 响应体 = 保存后的成品聚合（与 GET /config 同一份，字段已填满）：设置页直接交给
           // flattenConfigPets 拍平渲染，客户端的条目级字段只有这一处填充。
@@ -1234,6 +1259,8 @@ export function apply(ctx: any): void {
           // 默认文件缺失 / 用户目录不可写：显式 500，绝不静默留下半个配置文件
           return { kind: 'json', status: 500, obj: { error: e instanceof Error ? e.message : String(e) } };
         }
+        // 同步 = 用户层被内置默认整体覆盖（休息提醒回到默认关闭），计时器按新配置重排。
+        restReminder.rearm();
         void syncDesktop(); // 配置变了：重解析桌面宠物并重启 Helper（异步，不阻塞响应）
         return { kind: 'json', status: 200, obj: readAllConfig(configPaths) };
       }
@@ -1306,6 +1333,9 @@ export function apply(ctx: any): void {
       } catch (e) {
         return fail('generate-error', e instanceof Error ? e.message : String(e));
       }
+      // 休息提醒：改 display 不碰开关 / 间隔，但配置可能被手改写坏过；这里按落盘后的成品重排一次，
+      // 计时器仍然只有一个（与保存走同一个 rearm，天然不会叠加）。
+      restReminder.rearm();
       // 配置变更信号（只在写盘成功之后：失败时不该动版本号，否则浏览器白重拉一次 /config）。
       // 这是全插件唯一写 sections.config 的地方：保存 / 同步配置的调用方自己就拿到了成品聚合
       // （响应体），桌面端由下面的 syncDesktop() 重启，都不需要这个信号；
@@ -2403,6 +2433,13 @@ export function apply(ctx: any): void {
       }),
     'dsh-pet: /balance command',
   );
+
+  // 休息提醒调度：插件启动时按当前配置起一拍；卸载时 dispose 清掉唯一计时器。
+  // 不做「启动补发」——重启后就是完整的一个间隔（需求：不补发未运行期间的提醒）。
+  ctx.effect(() => {
+    restReminder.rearm();
+    return () => restReminder.dispose();
+  }, 'dsh-pet: rest reminder');
 
   // 余额周期刷新：host 侧唯一定时器。周期每次重新读配置 eventsRefreshSec.balance，改了下一拍跟上。
   // 没有任何启用余额的宠物时跳过查询：尊重配置，不白花外部 API 调用。

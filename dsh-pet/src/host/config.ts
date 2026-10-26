@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFile
 import { dirname, join } from 'node:path';
 
 import { defaultLog } from './log-file';
+import { restReminderIntervalValid } from './rest-reminder';
 
 /** 位置角落白名单 */
 const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
@@ -345,6 +346,12 @@ function topFieldValid(key: string, value: unknown): boolean {
     case 'trayEnabled':
       // 桌面模式系统托盘开关（main 条目顶层；helper 读它决定建不建托盘图标）
       return typeof value === 'boolean';
+    case 'restReminderEnabled':
+      // 休息提醒总开关（全局布尔，只读 main 条目）：与 notificationsEnabled 同一套校验
+      return typeof value === 'boolean';
+    case 'restReminderIntervalMin':
+      // 休息提醒间隔（分钟）：有限数字且 > 0；0 / 负数 / NaN / Infinity 都非法（小数合法，0.5 = 30 秒）
+      return restReminderIntervalValid(value);
     case 'animations':
       return animationsValid(value);
     case 'animationWeights':
@@ -690,6 +697,13 @@ export function saveUserConfig(
   // 系统托盘开关（全局，仅桌面模式）：与上面几个全局布尔同语义——传了必须是布尔，没传走透传保留。
   const te = o.trayEnabled;
   if (te !== undefined && typeof te !== 'boolean') return null;
+  // 休息提醒开关 / 间隔（全局，设置页「休息提醒」卡片写的就是这两个）：与上面几个全局字段同语义——
+  // 传了就校验后进白名单，没传则走透传保留。开关必须是布尔；间隔与读取侧共用同一份规则
+  // （有限且 > 0，支持小数分钟），非法整包 400，绝不静默写一个 0 或负数进去。
+  const rre = o.restReminderEnabled;
+  if (rre !== undefined && typeof rre !== 'boolean') return null;
+  const rri = o.restReminderIntervalMin;
+  if (rri !== undefined && !restReminderIntervalValid(rri)) return null;
   // physics（拖拽抛掷手感，设置页「物理」区可图形化编辑）：整段校验——physicsValid 与读取侧
   // 是同一份规则（gravity/groundFriction ≥ 0、restitution ∈ [0,1]、throwPower > 0、两个布尔）。
   // 传了就按白名单写入；没传则走下面的透传保留（用户手改的值原样不动）。
@@ -729,6 +743,9 @@ export function saveUserConfig(
   if (cie !== undefined) outConfig.chatImageEnabled = cie;
   if (cts !== undefined) outConfig.confineToScreen = cts;
   if (te !== undefined) outConfig.trayEnabled = te;
+  if (rre !== undefined) outConfig.restReminderEnabled = rre;
+  // 间隔归一化落盘：请求体传 "30" 也存成 30（与读取侧 Number() 口径一致）
+  if (rri !== undefined) outConfig.restReminderIntervalMin = Number(rri);
   if (ph !== undefined) outConfig.physics = ph;
   if (fo !== undefined) outConfig.font = fo;
   if (wm !== undefined) outConfig.whisperModel = cleanModel(wm as Record<string, unknown>);
@@ -747,6 +764,8 @@ export function saveUserConfig(
   if (cie !== undefined) bodyOwned.add('chatImageEnabled');
   if (cts !== undefined) bodyOwned.add('confineToScreen');
   if (te !== undefined) bodyOwned.add('trayEnabled');
+  if (rre !== undefined) bodyOwned.add('restReminderEnabled');
+  if (rri !== undefined) bodyOwned.add('restReminderIntervalMin');
   if (ph !== undefined) bodyOwned.add('physics');
   if (fo !== undefined) bodyOwned.add('font');
   if (wm !== undefined) bodyOwned.add('whisperModel');

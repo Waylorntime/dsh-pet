@@ -44,6 +44,8 @@ DSH 设置 → 「桌宠配置」：
 | `animationWeights`     | 动画链播放权重（idle / turn / move）                                                    | 同 `animationWeights` 结构 |
 | `eventsRefreshSec`     | 事件刷新周期（秒）                                                                      | 同 `eventsRefreshSec` 结构 |
 | `notificationsEnabled` | 系统通知总开关（布尔）                                                                  | 同 `notificationsEnabled`  |
+| `restReminderEnabled`  | 休息提醒总开关（布尔，默认 `false`）；开启后按间隔用气泡提醒「起来活动一下」             | 布尔值                     |
+| `restReminderIntervalMin` | 休息提醒间隔（分钟，必须 > 0，支持小数；默认 `25`，`0.5` = 30 秒）                    | 正数（分钟）               |
 
 > 覆盖语义：用户层给出即**整体替换**该字段（如写了 `animations` 就用你的整份动画池，替代默认），没写的字段回落包内默认。校验在插件加载时执行——格式错误会在 DSH 控制台显式报错，不会静默运行残缺配置。
 
